@@ -1,5 +1,15 @@
-![PAMPLEJUCE](assets/images/pamplejuce.png)
-[![](https://github.com/sudara/pamplejuce/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/sudara/pamplejuce/actions)
+# !WARNING!
+# !THIS PROJECT IS A WIP!
+# !USE WITH EXTREME CAUTION!
+## Feedback in unstable audio software (such as in this here plugin) 
+## may go haywire and DAMAGE YOUR HEARING.
+## If you still want to use it, PLEASE USE A LIMITER!
+
+TODO: remove the disclaimer above when the plugin is stable 
+
+This repo is based on [Pamplejuce, a ~~template~~ lifestyle by sudaru](https://github.com/sudara/pamplejuce), [JUCE]() and [INSERT USED JUCE MODULES HERE]
+Please go and support these projects!
+
 
 Pamplejuce is a ~~template~~ lifestyle for creating and building JUCE plugins in 2024.
 
