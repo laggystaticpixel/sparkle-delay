@@ -44,11 +44,10 @@ include(JUCEDefaults)
 # and later `git submodule update --remote --merge` to keep it up to date
 # On Github Actions, this is done as a part of actions/checkout
 add_subdirectory(JUCE)
+add_subdirectory(chowdsp_utils)
 
 # Add any other modules you want modules here, before the juce_add_plugin call
 # juce_add_module(modules/my_module)
-juce_add_module(modules/chowdsp_utils/modules/common/chowdsp_data_structures)
-juce_add_module(modules/chowdsp_utils/modules/common/chowdsp_core)
 
 # This adds the melatonin inspector module
 add_subdirectory (modules/melatonin_inspector)
@@ -133,8 +132,8 @@ target_link_libraries(SharedCode
     INTERFACE
     Assets
     melatonin_inspector
-    chowdsp_core
-    chowdsp_data_structures
+    chowdsp::chowdsp_core
+    chowdsp::chowdsp_data_structures
     juce_audio_utils
     juce_audio_processors
     juce_dsp

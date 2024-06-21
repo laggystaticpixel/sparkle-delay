@@ -134,11 +134,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::getParamete
 }
 
 void PluginProcessor::updateParameters() {
-    delayTime = apvts.getParameter("delayTime")->getValue();
-    feedback = apvts.getParameter("feedback")->getValue();
-    dryMix = apvts.getParameter("dryMix")->getValue();
-    wetMix = apvts.getParameter("wetMix")->getValue();
-    debugFlag = apvts.getParameter("DEBUG")->getValue();
+    delayTime = apvts.getParameterAsValue("delayTime").getValue();;
+    feedback = apvts.getParameterAsValue("feedback").getValue();
+    dryMix = apvts.getParameterAsValue("dryMix").getValue();
+    wetMix = apvts.getParameterAsValue("wetMix").getValue();
+    debugFlag = apvts.getParameterAsValue("DEBUG").getValue();
 }
 
 void PluginProcessor::updateDelayBufferSizes(int sampleRate) {
