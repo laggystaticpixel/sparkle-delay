@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <chowdsp_data_structures/chowdsp_data_structures.h>
 
 #if (MSVC)
 #include "ipps.h"
@@ -40,4 +41,17 @@ public:
 
 private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
+
+    juce::AudioProcessorValueTreeState::ParameterLayout getParameterLayout();
+    void updateParameters();
+
+    juce::AudioProcessorValueTreeState apvts;
+    void updateDelayBufferSizes(int);
+
+    float dryMix;
+    float wetMix;
+    float feedback;
+    float delayTime;
+    bool debugFlag;
+    std::vector<chowdsp::DoubleBuffer<float>> delayBuffers;
 };

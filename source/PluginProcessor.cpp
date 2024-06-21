@@ -10,7 +10,7 @@ PluginProcessor::PluginProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ), apvts(*this, nullptr, "CoolAudioProcessorValueTreeType", getParameterLayout())
 {
 }
 
@@ -88,7 +88,9 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    updateParameters();
+    updateDelayBufferSizes(sampleRate);
+    juce::ignoreUnused (samplesPerBlock);
 }
 
 void PluginProcessor::releaseResources()
@@ -119,6 +121,44 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
   #endif
 }
 
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::getParameterLayout() 
+{
+    return 
+    {
+        std::make_unique<juce::AudioParameterFloat>("delayTime", "Delay Time", 0.01f, 4.0f, 0.2f),
+        std::make_unique<juce::AudioParameterFloat>("feedback", "Feedback", 0.0f, 0.99f, 0.3f),
+        std::make_unique<juce::AudioParameterFloat>("dryMix", "Dry Mix", 0.0f, 1.0f, 0.8f),
+        std::make_unique<juce::AudioParameterFloat>("wetMix", "Wet Mix", 0.0f, 1.0f, 0.6f),
+        std::make_unique<juce::AudioParameterBool>("DEBUG", "DEBUG", false),
+    };
+}
+
+void PluginProcessor::updateParameters() {
+    delayTime = apvts.getParameter("delayTime")->getValue();
+    feedback = apvts.getParameter("feedback")->getValue();
+    dryMix = apvts.getParameter("dryMix")->getValue();
+    wetMix = apvts.getParameter("wetMix")->getValue();
+    debugFlag = apvts.getParameter("DEBUG")->getValue();
+}
+
+void PluginProcessor::updateDelayBufferSizes(int sampleRate) {
+    auto minDelayBufferSize = (int)ceil(2 * sampleRate * apvts.getParameterRange("delayTime").getRange().getEnd());
+    auto channelSet = getBusesLayout().getMainOutputChannelSet();
+    uint numChannels = 1;
+    // if stereo, make sure to make 2 delay buffers
+    // also if more channels are supported in the future, the code below should stay valid
+    if (channelSet == juce::AudioChannelSet::stereo()) {
+        numChannels = 2;
+    }
+    while (delayBuffers.size() < numChannels) {
+        delayBuffers.push_back(chowdsp::DoubleBuffer<float>(512));
+    }
+    for (int i = 0; i < numChannels; i++) {
+        if (delayBuffers[i].size() < minDelayBufferSize)
+            delayBuffers[i].resize(minDelayBufferSize);
+    }
+}
+
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
@@ -127,6 +167,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
+    auto numSamples = buffer.getNumSamples();
 
     // In case we have more outputs than inputs, this code clears any output
     // channels that didn't contain input data, (because these aren't
@@ -135,19 +176,39 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // when they first compile a plugin, but obviously you don't need to keep
     // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
+        buffer.clear (i, 0, numSamples);
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+    updateParameters();
+    
+    auto srate = getSampleRate();
+
+    auto wetBuffer = juce::AudioBuffer<float>(
+        totalNumInputChannels, 
+        numSamples
+    );
+
+    auto bufferCopy = juce::AudioBuffer<float>();
+    bufferCopy.makeCopyOf(buffer);
+    auto delayNumSamples = (int)ceil(delayTime * srate);
+
+    for (int channel = 0; channel < totalNumInputChannels; channel++)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        // TODO: cover the case that delayNumSamples < numSamples at low delayTime (maybe process sample-by-sample?)
+        auto delayDataPointer = delayBuffers[channel].getWritePointer() + delayBuffers[channel].size() - delayNumSamples;
+        wetBuffer.copyFrom(channel, 0, delayBuffers[channel].data(delayDataPointer), numSamples);
+        bufferCopy.addFrom(channel, 0, wetBuffer, channel, 0, numSamples, feedback);
+        delayBuffers[channel].push(bufferCopy.getReadPointer(channel), numSamples);
+    }
+    buffer.applyGain(dryMix);
+    for (int channel = 0; channel < totalNumInputChannels; channel++)
+    {
+        buffer.addFrom(channel, 0, wetBuffer, channel, 0, numSamples, wetMix);
+    }
+
+    if (debugFlag) {
+        // TODO: remove this, this is bad :)
+        // (use DBG to print something)
+        apvts.getParameter("DEBUG")->setValue(false);
     }
 }
 
@@ -165,17 +226,17 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 //==============================================================================
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    auto state = apvts.copyState();
+    auto xml = state.createXml();
+    copyXmlToBinary(*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+    auto xml = getXmlFromBinary(data, sizeInBytes);
+    if (xml.get() != nullptr)
+        if (xml->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 //==============================================================================

@@ -8,6 +8,7 @@
 TODO: remove the disclaimer above when the plugin is stable 
 
 This repo is based on [Pamplejuce, a ~~template~~ lifestyle by sudara](https://github.com/sudara/pamplejuce), [JUCE]() and [INSERT USED JUCE MODULES HERE]
+
 Please go and support these projects!
 
 
