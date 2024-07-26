@@ -134,6 +134,7 @@ target_link_libraries(SharedCode
     melatonin_inspector
     chowdsp::chowdsp_core
     chowdsp::chowdsp_data_structures
+    chowdsp::chowdsp_dsp_utils
     juce_audio_utils
     juce_audio_processors
     juce_dsp

@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <chowdsp_data_structures/chowdsp_data_structures.h>
+#include "Grain.h"
 
 #if (MSVC)
 #include "ipps.h"
@@ -43,15 +44,28 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 
     juce::AudioProcessorValueTreeState::ParameterLayout getParameterLayout();
-    void updateParameters();
+    void updateParameters(int sampleRate);
 
     juce::AudioProcessorValueTreeState apvts;
     void updateDelayBufferSizes(int);
+
+    template <typename T>
+    void updateParameter(T& paramRef, const char* parameterName);
 
     float dryMix;
     float wetMix;
     float feedback;
     float delayTime;
+    float delayTimeVar;
+    int grainPeriod;
+    float grainAttack;
+    float grainDecay;
+    float grainSustain;
+    float grainRelease;
+    float grainRate;
+    
+    int currentGrainOffset = 0;
     bool debugFlag;
-    std::vector<chowdsp::DoubleBuffer<float>> delayBuffers;
+    std::vector<chowdsp::DoubleBuffer<float>> delayBuffers;    
+    std::vector<lsp::Grain> futureGrainQueue = {};
 };

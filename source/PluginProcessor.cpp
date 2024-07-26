@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "SharedResources.h"
 
 //==============================================================================
 PluginProcessor::PluginProcessor()
@@ -88,7 +89,7 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
-    updateParameters();
+    updateParameters(sampleRate);
     updateDelayBufferSizes(sampleRate);
     juce::ignoreUnused (samplesPerBlock);
 }
@@ -120,25 +121,54 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     return true;
   #endif
 }
-
+//
 juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::getParameterLayout() 
 {
     return 
     {
-        std::make_unique<juce::AudioParameterFloat>("delayTime", "Delay Time", 0.01f, 4.0f, 0.2f),
-        std::make_unique<juce::AudioParameterFloat>("feedback", "Feedback", 0.0f, 0.99f, 0.3f),
+        std::make_unique<juce::AudioParameterFloat>("grainRate", "grainRate", 0.1f, 200.0f, 0.5f),
+        std::make_unique<juce::AudioParameterFloat>("grainAttack", "grainAttack", 1.0f, 50.0f, 3.0f),
+        std::make_unique<juce::AudioParameterFloat>("grainDecay", "grainDecay", 1.0f, 50.0f, 10.0f),
+        std::make_unique<juce::AudioParameterFloat>("grainSustain", "grainSustain", 0.0f, 1.0f, 1.0f),
+        std::make_unique<juce::AudioParameterFloat>("grainRelease", "grainRelease", 1.0f, 50.0f, 20.0f),
+        std::make_unique<juce::AudioParameterFloat>("delayTime", "Delay Time", 0.01f, 4.0f, 1.0f),
+        std::make_unique<juce::AudioParameterFloat>("delayTimeVar", "delayTimeVar", 0.0f, 0.5f, 0.1f),
+        std::make_unique<juce::AudioParameterFloat>("feedback", "Feedback", 0.0f, 0.99f, 0.2f),
         std::make_unique<juce::AudioParameterFloat>("dryMix", "Dry Mix", 0.0f, 1.0f, 0.8f),
         std::make_unique<juce::AudioParameterFloat>("wetMix", "Wet Mix", 0.0f, 1.0f, 0.6f),
         std::make_unique<juce::AudioParameterBool>("DEBUG", "DEBUG", false),
     };
 }
 
-void PluginProcessor::updateParameters() {
+template <typename T>
+void PluginProcessor::updateParameter(T& paramRef, const char* parameterName) {
+    paramRef = apvts.getRawParameterValue(parameterName)->load();
+}
+
+
+void PluginProcessor::updateParameters(int sampleRate) {
+    updateParameter(grainAttack, "grainAttack");
+    grainAttack /= 1000.0f;
+    updateParameter(grainDecay, "grainDecay");
+    grainDecay /= 1000.0f;
+    updateParameter(grainSustain, "grainSustain");
+    updateParameter(grainRelease, "grainRelease");
+    grainRelease /= 1000.0f;
+    updateParameter(grainRate, "grainRate");
+    // grainRate = static_cast<juce::AudioParameterFloat*>(apvts.getParameter("grainRate"))->get();
+    grainPeriod = (int)ceil(sampleRate / grainRate);
+
+    updateParameter(delayTimeVar, "delayTimeVar");
     delayTime = apvts.getParameterAsValue("delayTime").getValue();;
     feedback = apvts.getParameterAsValue("feedback").getValue();
     dryMix = apvts.getParameterAsValue("dryMix").getValue();
     wetMix = apvts.getParameterAsValue("wetMix").getValue();
-    debugFlag = apvts.getParameterAsValue("DEBUG").getValue();
+    // wow! what an intuitive way to get my boolean parameter!
+    auto debugFlagParam = dynamic_cast<juce::AudioParameterBool*>(apvts.getParameter("DEBUG"));
+    if (debugFlagParam != nullptr) {
+        debugFlag = debugFlagParam->get();
+    }
+    
 }
 
 void PluginProcessor::updateDelayBufferSizes(int sampleRate) {
@@ -178,37 +208,111 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, numSamples);
 
-    updateParameters();
-    
-    auto srate = getSampleRate();
+    // save dryMix and wetMix before updating them for smoothing later
+    auto oldDryMix = dryMix;
+    auto oldWetMix = wetMix;
+
+    auto sampleRate = getSampleRate();
+    updateParameters(sampleRate);
 
     auto wetBuffer = juce::AudioBuffer<float>(
         totalNumInputChannels, 
         numSamples
     );
+    wetBuffer.clear();
 
     auto bufferCopy = juce::AudioBuffer<float>();
     bufferCopy.makeCopyOf(buffer);
-    auto delayNumSamples = (int)ceil(delayTime * srate);
+    auto delayNumSamples = (int)ceil(delayTime * sampleRate);
+
+    while (currentGrainOffset <= numSamples) {
+        // Add fresh grains to the queue
+        auto adsr = juce::ADSR();
+        adsr.setParameters({grainAttack, grainDecay, grainSustain, grainRelease});
+        adsr.setSampleRate(sampleRate);
+        auto normalizedAddedOffset = lsp::SharedResources::random.nextFloat() - 0.5f;
+        auto addedOffsetSamples = (int)(delayTimeVar * sampleRate * normalizedAddedOffset);
+        auto rev = lsp::SharedResources::random.nextBool();
+        auto shiftPitch = lsp::SharedResources::random.nextBool();
+        futureGrainQueue.push_back(lsp::Grain(currentGrainOffset, delayNumSamples, adsr, sampleRate, rev, shiftPitch));
+        currentGrainOffset += grainPeriod + (addedOffsetSamples > 0 ? addedOffsetSamples : 0);
+    }
+
+    for (auto& g: futureGrainQueue) {
+        if (g.lengthInSamples + g.sampleOffset < 0 && !g.readyToPlay) {
+            // put data from dBuffer into the not yet playing grains that have their content just recorded
+            g.internalBuffer.setSize(totalNumInputChannels, g.lengthInSamples);
+            
+            for (int channel = 0; channel < totalNumInputChannels; channel++){
+                auto delayDataPointer = delayBuffers[channel].getWritePointer() + delayBuffers[channel].size() - delayNumSamples;    
+                g.internalBuffer.copyFrom(
+                    channel, 0, 
+                    delayBuffers[channel].data(delayDataPointer + g.sampleOffset), 
+                    g.lengthInSamples
+                );
+            }
+            g.readyToPlay = true;
+            g.applyADSR();
+        } 
+    }
+
+    for (auto& g: futureGrainQueue) {
+        // skip grain if the contents arent saved yet
+        if (!g.readyToPlay)
+            continue;
+
+        if (g.progress == 0 && g.delayNumSamples + g.sampleOffset < 0 && !g.isPlaying) {
+            g.progress = g.lengthInSamples;
+            continue;
+        }
+
+        if (g.progress == 0 && 
+            g.delayNumSamples + g.sampleOffset < numSamples && 
+            !g.isPlaying
+        ) {
+            // start the grain
+            g.process(wetBuffer, 1.0f, g.delayNumSamples + g.sampleOffset);
+            g.isPlaying = true;
+        } else if (g.progress != 0 && g.delayNumSamples + g.lengthInSamples + g.sampleOffset > 0) {
+            // play the grain
+            g.process(wetBuffer, 1.0f);
+        }
+        
+    }
 
     for (int channel = 0; channel < totalNumInputChannels; channel++)
     {
         // TODO: cover the case that delayNumSamples < numSamples at low delayTime (maybe process sample-by-sample?)
         auto delayDataPointer = delayBuffers[channel].getWritePointer() + delayBuffers[channel].size() - delayNumSamples;
-        wetBuffer.copyFrom(channel, 0, delayBuffers[channel].data(delayDataPointer), numSamples);
         bufferCopy.addFrom(channel, 0, wetBuffer, channel, 0, numSamples, feedback);
         delayBuffers[channel].push(bufferCopy.getReadPointer(channel), numSamples);
     }
-    buffer.applyGain(dryMix);
+    buffer.applyGainRamp(0, numSamples, oldDryMix, dryMix);
+    wetBuffer.applyGainRamp(0, numSamples, oldWetMix, wetMix);
     for (int channel = 0; channel < totalNumInputChannels; channel++)
     {
-        buffer.addFrom(channel, 0, wetBuffer, channel, 0, numSamples, wetMix);
+        buffer.addFrom(channel, 0, wetBuffer, channel, 0, numSamples);
     }
+
+    // Remove the grains that have finished playing
+    auto isGrainActive = [](lsp::Grain g){ return g.progress == g.lengthInSamples;};
+    futureGrainQueue.erase(
+        std::remove_if(begin(futureGrainQueue), end(futureGrainQueue), isGrainActive),
+        end(futureGrainQueue)
+    );
+    
+    // subtract numSamples from sampleOffset of all grains (make grains "older")
+    for (auto& g: futureGrainQueue) {
+        g.sampleOffset -= numSamples;
+    }
+
+    currentGrainOffset -= numSamples;
 
     if (debugFlag) {
         // TODO: remove this, this is bad :)
         // (use DBG to print something)
         apvts.getParameter("DEBUG")->setValue(false);
+        debugFlag = false;
     }
 }
 
